@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity ^0.8.23;
 
 import "forge-std/Test.sol";
 import {
     StrategyAaveV4Spoke,
     BaseAllToNativeFactoryStrat
-} from "../../../contracts/BIFI/strategies/Aave/StrategyAaveV4Spoke.sol";
-import {StrategyFactory} from "../../../contracts/BIFI/infra/StrategyFactory.sol";
-import {BeefyVaultV7} from "../../../contracts/BIFI/vaults/BeefyVaultV7.sol";
-import {IStrategyV7} from "../../../contracts/BIFI/interfaces/beefy/IStrategyV7.sol";
-import {BeefyFeeConfigurator} from "../../../contracts/BIFI/infra/BeefyFeeConfigurator.sol";
+} from "../../../../contracts/BIFI/strategies/Aave/StrategyAaveV4Spoke.sol";
+import {StrategyFactory} from "../../../../contracts/BIFI/infra/StrategyFactory.sol";
+import {BeefyVaultV7} from "../../../../contracts/BIFI/vaults/BeefyVaultV7.sol";
+import {IStrategyV7} from "../../../../contracts/BIFI/interfaces/beefy/IStrategyV7.sol";
+import {BeefyFeeConfigurator} from "../../../../contracts/BIFI/infra/BeefyFeeConfigurator.sol";
 import "./Mocks.sol";
 
 contract StrategyAaveV4SpokeTest is Test {

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity ^0.8.23;
 
 import "forge-std/Test.sol";
 import {
     StrategyAaveV4Spoke,
     BaseAllToNativeFactoryStrat
-} from "../../../contracts/BIFI/strategies/Aave/StrategyAaveV4Spoke.sol";
-import {StrategyFactory} from "../../../contracts/BIFI/infra/StrategyFactory.sol";
-import {BeefyVaultV7} from "../../../contracts/BIFI/vaults/BeefyVaultV7.sol";
-import {IStrategyV7} from "../../../contracts/BIFI/interfaces/beefy/IStrategyV7.sol";
-import {BeefyFeeConfigurator} from "../../../contracts/BIFI/infra/BeefyFeeConfigurator.sol";
+} from "../../../../contracts/BIFI/strategies/Aave/StrategyAaveV4Spoke.sol";
+import {StrategyFactory} from "../../../../contracts/BIFI/infra/StrategyFactory.sol";
+import {BeefyVaultV7} from "../../../../contracts/BIFI/vaults/BeefyVaultV7.sol";
+import {IStrategyV7} from "../../../../contracts/BIFI/interfaces/beefy/IStrategyV7.sol";
+import {BeefyFeeConfigurator} from "../../../../contracts/BIFI/infra/BeefyFeeConfigurator.sol";
 import "./Mocks.sol";
 
 interface IMag7Status {
@@ -20,8 +20,8 @@ interface IMag7Status {
 }
 
 /// @dev Real Base tokens, MAG7 and Hub; synthetic Merkl entitlement and funded deterministic swaps.
-/// Requires Base Foundry (tested with base/base-anvil v1.1.1) to execute B20 native precompiles.
-/// Run: FOUNDRY_BASE=true FOUNDRY_PROFILE=aave-v4-spoke base-forge test --match-contract StrategyAaveV4SpokeForkTest -vv
+/// Requires Foundry >= 1.8.4 with hardfork base:Cobalt (set in the b20 profile) to execute B20 native precompiles.
+/// Run: FOUNDRY_PROFILE=b20 forge test --match-contract StrategyAaveV4SpokeForkTest -vv
 contract StrategyAaveV4SpokeForkTest is Test {
     using stdStorage for StdStorage;
 
@@ -181,8 +181,13 @@ contract StrategyAaveV4SpokeForkTest is Test {
         want.approve(address(vault), 100e8);
         uint256 snapshot = vm.snapshotState();
         // Change only the Hub's add cap on this fork; execute the real supply validation.
-        stdstore.target(HUB).sig("getSpokeConfig(uint256,address)").with_key(strategy.assetId()).with_key(MAG7).depth(0)
-            .enable_packed_slots().checked_write(uint256(0));
+        stdstore.target(HUB)
+            .sig("getSpokeConfig(uint256,address)")
+            .with_key(strategy.assetId())
+            .with_key(MAG7)
+            .depth(0)
+            .enable_packed_slots()
+            .checked_write(uint256(0));
         vm.prank(USER);
         vm.expectRevert(abi.encodeWithSignature("AddCapExceeded(uint256)", 0));
         vault.deposit(100e8);
@@ -205,7 +210,10 @@ contract StrategyAaveV4SpokeForkTest is Test {
         uint256 principal = strategy.storedBalance();
         uint256 snapshot = vm.snapshotState();
         // Simulate exhausted available liquidity; keep real Hub/Spoke code and user positions.
-        stdstore.target(HUB).sig("getAssetLiquidity(uint256)").with_key(strategy.assetId()).enable_packed_slots()
+        stdstore.target(HUB)
+            .sig("getAssetLiquidity(uint256)")
+            .with_key(strategy.assetId())
+            .enable_packed_slots()
             .checked_write(uint256(0));
         vm.prank(USER);
         vm.expectRevert(abi.encodeWithSignature("InsufficientLiquidity(uint256)", 0));
