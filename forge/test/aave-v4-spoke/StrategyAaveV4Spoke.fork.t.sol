@@ -21,8 +21,10 @@ interface IMag7Status {
 
 /// @dev Real Base tokens, MAG7 and Hub; synthetic Merkl entitlement and funded deterministic swaps.
 /// Requires Base Foundry (tested with base/base-anvil v1.1.1) to execute B20 native precompiles.
-/// Run: FOUNDRY_PROFILE=aave-v4-spoke base-forge test --match-contract StrategyAaveV4SpokeForkTest -vv
+/// Run: FOUNDRY_BASE=true FOUNDRY_PROFILE=aave-v4-spoke base-forge test --match-contract StrategyAaveV4SpokeForkTest -vv
 contract StrategyAaveV4SpokeForkTest is Test {
+    using stdStorage for StdStorage;
+
     address constant MAG7 = 0x17905Db0e4A3514467539956c084180616AE7B8D;
     address constant HUB = 0xa4d5947Eb727A052bae69C593FfC84247EC9864E;
     address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -75,7 +77,7 @@ contract StrategyAaveV4SpokeForkTest is Test {
         );
         vault.initialize(IStrategyV7(address(strategy)), "Moo MAG7 Test", "mooMAG7", 21600);
         assertEq(strategy.assetId(), reserve.assetId);
-        assertEq(strategy.lockDuration(), 3600);
+        assertEq(strategy.lockDuration(), 1 days);
     }
 
     /// @dev Native precompile storage reads are not recorded by stdStorage in Base Foundry v1.1.1.
@@ -142,7 +144,7 @@ contract StrategyAaveV4SpokeForkTest is Test {
         strategy.harvest(FEE_RECIPIENT);
         assertGt(strategy.lockedProfit(), 0);
         assertApproxEqAbs(strategy.balanceOf(), before, 3);
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         vm.prank(USER);
         vault.withdrawAll();
         assertGt(want.balanceOf(USER), 109e8);
@@ -160,7 +162,7 @@ contract StrategyAaveV4SpokeForkTest is Test {
         assertEq(want.balanceOf(address(lender)), 1000e8);
         assertGt(strategy.lockedProfit(), 95e8);
 
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         strategy.panic();
         assertEq(IAaveV4Spoke(MAG7).getUserSuppliedShares(id, address(strategy)), 0);
         assertEq(strategy.storedBalance(), 0);
@@ -170,6 +172,53 @@ contract StrategyAaveV4SpokeForkTest is Test {
         strategy.retireStrat();
         assertEq(IAaveV4Spoke(MAG7).getUserSuppliedShares(id, address(strategy)), 0);
         assertGt(want.balanceOf(address(vault)), 195e8);
+    }
+
+    function test_supplyCapRevertsDepositAndRecovers() public {
+        _prepare(0, 0xb200000000000000000000C2e324d24d7eEcd1fb);
+        _fund(address(want), USER, 100e8);
+        vm.prank(USER);
+        want.approve(address(vault), 100e8);
+        uint256 snapshot = vm.snapshotState();
+        // Change only the Hub's add cap on this fork; execute the real supply validation.
+        stdstore.target(HUB).sig("getSpokeConfig(uint256,address)").with_key(strategy.assetId()).with_key(MAG7).depth(0)
+            .enable_packed_slots().checked_write(uint256(0));
+        vm.prank(USER);
+        vm.expectRevert(abi.encodeWithSignature("AddCapExceeded(uint256)", 0));
+        vault.deposit(100e8);
+        assertEq(want.balanceOf(USER), 100e8);
+        assertEq(vault.balanceOf(USER), 0);
+        assertEq(vault.totalSupply(), 0);
+        assertEq(strategy.storedBalance(), 0);
+
+        assertTrue(vm.revertToState(snapshot));
+        vm.prank(USER);
+        vault.deposit(100e8);
+        assertGt(vault.balanceOf(USER), 0);
+        assertApproxEqAbs(strategy.balanceOfPool(), 100e8, 2);
+    }
+
+    function test_insufficientLiquidityPreservesSharesAndRecovers() public {
+        _prepare(0, 0xb200000000000000000000C2e324d24d7eEcd1fb);
+        _deposit(100e8);
+        uint256 shares = vault.balanceOf(USER);
+        uint256 principal = strategy.storedBalance();
+        uint256 snapshot = vm.snapshotState();
+        // Simulate exhausted available liquidity; keep real Hub/Spoke code and user positions.
+        stdstore.target(HUB).sig("getAssetLiquidity(uint256)").with_key(strategy.assetId()).enable_packed_slots()
+            .checked_write(uint256(0));
+        vm.prank(USER);
+        vm.expectRevert(abi.encodeWithSignature("InsufficientLiquidity(uint256)", 0));
+        vault.withdrawAll();
+        assertEq(vault.balanceOf(USER), shares);
+        assertEq(strategy.storedBalance(), principal);
+        assertEq(want.balanceOf(USER), 0);
+
+        assertTrue(vm.revertToState(snapshot));
+        vm.prank(USER);
+        vault.withdrawAll();
+        assertEq(vault.balanceOf(USER), 0);
+        assertApproxEqAbs(want.balanceOf(USER), 100e8, 3);
     }
 
     function test_seededDonationDoesNotStealPrincipalOnRealAave() public {

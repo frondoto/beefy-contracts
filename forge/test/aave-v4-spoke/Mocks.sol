@@ -24,6 +24,7 @@ contract MockToken is ERC20 {
 }
 
 /// @dev Models the Hub's floor-on-supply / ceil-on-withdraw share conversions.
+/// Caps and Hub liquidity constraints are exercised against real contracts in the fork tests.
 contract MockSpoke is IAaveV4Spoke, IAaveV4Hub {
     IERC20 public token;
     uint256 public index = 1e18;
@@ -39,6 +40,13 @@ contract MockSpoke is IAaveV4Spoke, IAaveV4Hub {
     }
 
     function setIndex(uint256 i) external {
+        require(i >= index, "index decreased");
+        index = i;
+    }
+
+    /// @dev Synthetic accounting stress only; not normal Aave interest-index behavior.
+    function simulateLoss(uint256 i) external {
+        require(i > 0 && i < index, "!loss");
         index = i;
     }
 
@@ -60,8 +68,10 @@ contract MockSpoke is IAaveV4Spoke, IAaveV4Hub {
 
     function supply(uint256, uint256 a, address u) external returns (uint256 s, uint256) {
         require(u == msg.sender, "self");
-        token.transferFrom(msg.sender, address(this), a);
+        require(a > 0, "!amount");
         s = a * 1e18 / index;
+        require(s > 0, "!shares");
+        token.transferFrom(msg.sender, address(this), a);
         shares[u] += s;
         return (s, a);
     }
@@ -70,6 +80,7 @@ contract MockSpoke is IAaveV4Spoke, IAaveV4Hub {
         require(u == msg.sender, "self");
         uint256 bal = getUserSuppliedAssets(0, u);
         if (a > bal) a = bal;
+        require(a > 0, "!amount");
         s = (a * 1e18 + index - 1) / index;
         shares[u] -= s;
         token.transfer(msg.sender, a);

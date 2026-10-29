@@ -46,7 +46,6 @@ contract StrategyAaveV4Spoke is BaseAllToNativeFactoryStrat {
         require(want != native, "!nativeWant");
         setClaimer(_claimer);
         setHarvestOnDeposit(_harvestOnDeposit);
-        lockDuration = 1 hours;
     }
 
     function stratName() public pure override returns (string memory) {
@@ -138,7 +137,7 @@ contract StrategyAaveV4Spoke is BaseAllToNativeFactoryStrat {
     }
 
     function setLockDuration(uint256 duration) external override onlyManager {
-        require(duration > 0, "!duration");
+        require(duration > 0 && duration <= 7 days, "!duration");
         // Checkpoint the remaining profit before changing the schedule; never unlock it instantly.
         totalLocked = lockedProfit();
         lastHarvest = block.timestamp;

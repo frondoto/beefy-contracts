@@ -101,6 +101,9 @@ contract StrategyAaveV4SpokeTest is Test {
         assertApproxEqAbs(strategy.lockedProfit(), 9.55e8, 2);
         assertGt(native.balanceOf(treasury), 0);
         vm.warp(block.timestamp + 1 hours);
+        assertApproxEqAbs(strategy.lockedProfit(), uint256(9.55e8) * 23 / 24, 2);
+        vm.warp(block.timestamp + 23 hours);
+        assertEq(strategy.lockedProfit(), 0);
         vm.prank(user);
         vault.withdrawAll();
         assertApproxEqAbs(want.balanceOf(user), 109.55e8, 3);
@@ -134,6 +137,37 @@ contract StrategyAaveV4SpokeTest is Test {
         assertEq(strategy.lockedProfit(), 0);
     }
 
+    function test_lockDurationBoundPreservesCheckpointAndRecovery() public {
+        _deposit(user, 100e8);
+        _reward(10e6);
+        _claim(10e6);
+        strategy.harvest(address(0xFEE));
+        vm.warp(block.timestamp + 1800);
+        uint256 locked = strategy.lockedProfit();
+        uint256 lastHarvest = strategy.lastHarvest();
+
+        vm.expectRevert("!duration");
+        strategy.setLockDuration(7 days + 1);
+        vm.expectRevert("!duration");
+        strategy.setLockDuration(type(uint256).max);
+        assertEq(strategy.lockDuration(), 1 days);
+        assertEq(strategy.lastHarvest(), lastHarvest);
+        assertEq(strategy.lockedProfit(), locked);
+
+        strategy.setLockDuration(7 days);
+        assertEq(strategy.lockedProfit(), locked);
+        vm.warp(block.timestamp + 3 days);
+        assertEq(strategy.lockedProfit(), locked * 4 / 7);
+        uint256 remaining = strategy.lockedProfit();
+        strategy.setLockDuration(1 hours);
+        assertEq(strategy.lockedProfit(), remaining);
+        vm.warp(block.timestamp + 1 hours);
+        assertEq(strategy.lockedProfit(), 0);
+        vm.prank(user);
+        vault.withdrawAll();
+        assertApproxEqAbs(want.balanceOf(user), 109.55e8, 3);
+    }
+
     function test_hodHarvestsBeforeNewSharesAreMinted() public {
         _deposit(user, 100e8);
         _reward(10e6);
@@ -142,7 +176,7 @@ contract StrategyAaveV4SpokeTest is Test {
         assertEq(vault.balanceOf(user), vault.balanceOf(address(0x555)));
         assertEq(strategy.lockedProfit(), 9.55e8);
         assertTrue(strategy.harvestOnDeposit());
-        assertEq(strategy.lockDuration(), 3600);
+        assertEq(strategy.lockDuration(), 1 days);
     }
 
     function _attack(bool hod, bool direct) internal {
@@ -220,14 +254,15 @@ contract StrategyAaveV4SpokeTest is Test {
         assertEq(spoke.shares(address(strategy)), 0);
     }
 
-    function test_lossesDontLeavePhantomPrincipalOrUnderflow() public {
+    // Synthetic loss stress test, not a model of normal Aave interest accrual.
+    function test_syntheticLossDoesNotLeavePhantomPrincipalOrUnderflow() public {
         _deposit(user, 100e8);
         _reward(100e6);
         _claim(100e6);
         strategy.harvest();
-        spoke.setIndex(0.1e18);
+        spoke.simulateLoss(0.1e18);
         assertEq(strategy.balanceOf(), 0);
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         vm.prank(user);
         vault.withdrawAll();
         assertEq(strategy.balanceOf(), 0);
@@ -248,6 +283,12 @@ contract StrategyAaveV4SpokeTest is Test {
 
     function test_zeroShareSupplyStaysIdle() public {
         spoke.setIndex(2e18);
+        vm.expectRevert("!amount");
+        spoke.supply(0, 0, address(this));
+        vm.expectRevert("!shares");
+        spoke.supply(0, 1, address(this));
+        vm.expectRevert("!amount");
+        spoke.withdraw(0, 0, address(this));
         want.mint(user, 1);
         vm.startPrank(user);
         want.approve(address(vault), 1);
@@ -423,7 +464,7 @@ contract StrategyAaveV4SpokeTest is Test {
         assertEq(strategy.lockedProfit(), locked);
         assertEq(strategy.balanceOf(), backing - locked);
         strategy.unpause();
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         vm.prank(user);
         vault.withdrawAll();
         assertGe(want.balanceOf(user), 100e8, "principal lost on emergency round-trip");
@@ -450,47 +491,6 @@ contract StrategyAaveV4SpokeTest is Test {
         strategy.harvest(attacker);
         vm.stopPrank();
         assertEq(want.balanceOf(attacker), 0);
-        vm.prank(user);
-        vault.withdrawAll();
-        assertEq(want.balanceOf(user), 100e8);
-    }
-
-    function test_failedSupplyRollsBackDeposit() public {
-        _deposit(strategist, 1e6);
-        want.mint(user, 100e8);
-        vm.prank(user);
-        want.approve(address(vault), 100e8);
-        uint256 backing = strategy.balanceOf();
-        uint256 supply = vault.totalSupply();
-        vm.mockCallRevert(
-            address(spoke),
-            abi.encodeWithSelector(IAaveV4Spoke.supply.selector),
-            abi.encodeWithSignature("Error(string)", "cap")
-        );
-        vm.prank(user);
-        vm.expectRevert(bytes("cap"));
-        vault.deposit(100e8);
-        assertEq(want.balanceOf(user), 100e8);
-        assertEq(vault.balanceOf(user), 0);
-        assertEq(vault.totalSupply(), supply);
-        assertEq(strategy.balanceOf(), backing);
-    }
-
-    function test_failedWithdrawalPreservesUserShares() public {
-        _deposit(user, 100e8);
-        uint256 shares = vault.balanceOf(user);
-        vm.mockCallRevert(
-            address(spoke),
-            abi.encodeWithSelector(IAaveV4Spoke.withdraw.selector),
-            abi.encodeWithSignature("Error(string)", "liquidity")
-        );
-        vm.prank(user);
-        vm.expectRevert("liquidity");
-        vault.withdrawAll();
-        assertEq(vault.balanceOf(user), shares);
-        assertEq(strategy.storedBalance(), 100e8);
-        assertEq(strategy.balanceOf(), 100e8);
-        vm.clearMockedCalls();
         vm.prank(user);
         vault.withdrawAll();
         assertEq(want.balanceOf(user), 100e8);
@@ -550,7 +550,7 @@ contract StrategyAaveV4SpokeTest is Test {
         strategy.harvest(address(0xFEE));
         assertEq(strategy.lockedProfit(), remaining + 9.55e8);
         assertEq(strategy.balanceOf(), before, "new locked rewards changed redeemable balance");
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         vm.prank(user);
         vault.withdrawAll();
         assertEq(want.balanceOf(user), 119.1e8);
@@ -578,7 +578,7 @@ contract StrategyAaveV4SpokeTest is Test {
         strategy.harvest(address(0xFEE));
         assertEq(native.balanceOf(treasury), 0.36e18);
         assertEq(strategy.lockedProfit(), 9.55e8);
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         vm.prank(user);
         vault.withdrawAll();
         assertApproxEqAbs(want.balanceOf(user), 109.55e8, 3);
@@ -618,7 +618,7 @@ contract StrategyAaveV4SpokeTest is Test {
             assertLe(strategy.balanceOf() + strategy.lockedProfit(), backing, "reported assets exceed backing");
         }
         strategy.harvest(address(0xFEE));
-        vm.warp(block.timestamp + 3600);
+        vm.warp(block.timestamp + 1 days);
         for (uint256 i; i < 2; ++i) {
             vm.prank(actors[i]);
             vault.withdrawAll();
